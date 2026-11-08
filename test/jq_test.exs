@@ -57,6 +57,16 @@ defmodule JQTest do
     test "handles boolean values" do
       assert {:ok, false} == JQ.query(%{"valid" => false}, ".valid")
     end
+
+    test "does not expose the caller's environment variables" do
+      System.put_env("EX_JQ_TEST_SECRET", "hunter2")
+
+      assert {:ok, nil} == JQ.query(%{}, "$ENV.EX_JQ_TEST_SECRET")
+      assert {:ok, nil} == JQ.query(%{}, "env.EX_JQ_TEST_SECRET")
+      assert {:ok, %{}} == JQ.query(%{}, "$ENV")
+    after
+      System.delete_env("EX_JQ_TEST_SECRET")
+    end
   end
 
   describe "JQ.query!" do

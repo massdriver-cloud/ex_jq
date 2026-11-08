@@ -59,7 +59,8 @@ defmodule JQ do
 
   The result is then decoded from JSON back into an elixir structure.
   The temporary file is removed, regardless of the outcome. `System.cmd/3` is called
-  with the `:stderr_to_stdout` option.
+  with the `:stderr_to_stdout` option. jq runs with an empty environment, so `$ENV`
+  and `env` return `{}`.
 
   ## Options
     * `:max_byte_size` - integer representing the maximum number of bytes allowed for the payload, defaults to `nil`.
@@ -87,7 +88,9 @@ defmodule JQ do
     File.close(fd)
 
     try do
-      case System.cmd("jq", [query, file_path], stderr_to_stdout: true) do
+      # Queries can read the process environment through `$ENV` and `env`, so jq runs with an
+      # empty one. `env -i` clears it; System.cmd's `:env` option can only unset named variables.
+      case System.cmd("env", ["-i", jq_executable(), query, file_path], stderr_to_stdout: true) do
         {_, code} = error when is_integer(code) and code != 0 ->
           raise(SystemCmdException, result: error, command: "jq", args: [query, file_path])
 
@@ -107,6 +110,9 @@ defmodule JQ do
       File.rm!(file_path)
     end
   end
+
+  # An absolute path, because jq starts without PATH.
+  defp jq_executable, do: System.find_executable("jq") || "jq"
 
   defp validate_max_byte_size(json, max_byte_size)
        when is_integer(max_byte_size) and byte_size(json) > max_byte_size do

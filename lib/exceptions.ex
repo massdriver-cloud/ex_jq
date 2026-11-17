@@ -16,6 +16,10 @@ defmodule JQ.SystemCmdException do
   end
 end
 
+defmodule JQ.TimeoutException do
+  defexception message: "jq ran longer than the timeout and was killed"
+end
+
 defmodule JQ.NoResultException do
   defexception message: "JQ query yielded no result"
 end

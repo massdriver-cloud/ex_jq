@@ -4,7 +4,7 @@ defmodule JQ.MixProject do
   def project do
     [
       app: :jq,
-      version: "1.0.3",
+      version: "1.0.4",
       elixir: "~> 1.7",
       description: "elixir wrapper for jq",
       package: package(),

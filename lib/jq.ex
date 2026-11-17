@@ -12,10 +12,17 @@ defmodule JQ do
       "value"
 
   """
-  alias JQ.{MaxByteSizeExceededException, NoResultException, SystemCmdException, UnknownException}
+  alias JQ.{
+    MaxByteSizeExceededException,
+    NoResultException,
+    SystemCmdException,
+    TimeoutException,
+    UnknownException
+  }
+
   require Logger
 
-  @default_options %{max_byte_size: nil}
+  @default_options %{max_byte_size: nil, timeout: :infinity}
 
   @doc ~S"""
   Execute a jq query on an elixir structure.
@@ -27,7 +34,7 @@ defmodule JQ do
   def query(payload, query, options \\ [])
 
   @spec query(any(), String.t(), list()) ::
-          {:ok, any()} | {:error, :cmd | :unknown | :max_byte_size_exceeded}
+          {:ok, any()} | {:error, :cmd | :unknown | :max_byte_size_exceeded | :timeout}
   def query(payload, query, options) do
     {:ok, query!(payload, query, options)}
   rescue
@@ -41,6 +48,10 @@ defmodule JQ do
     e in MaxByteSizeExceededException ->
       Logger.warning(e.message)
       {:error, :max_byte_size_exceeded}
+
+    e in TimeoutException ->
+      Logger.warning(e.message)
+      {:error, :timeout}
 
     error ->
       Logger.warning("unknown error. error: #{inspect(error)}")
@@ -64,11 +75,13 @@ defmodule JQ do
 
   ## Options
     * `:max_byte_size` - integer representing the maximum number of bytes allowed for the payload, defaults to `nil`.
+    * `:timeout` - milliseconds jq may run before it is killed, defaults to `:infinity`.
 
   ## Error reasons
   * `JQ.MaxByteSizeExceededException` - when the byte_size of the encoded elixir structure is greater than the `:max_byte_size` value
   * `JQ.SystemCmdException` - when System.cmd/3 returns a non zero exit code
   * `JQ.NoResultException` - when no result was returned
+  * `JQ.TimeoutException` - when jq runs longer than the `:timeout` option. The jq process is killed.
   * `JQ.UnknownException` - when System.cmd/3 returns any other error besides those already handled
   * `Poison.EncodeError` - when there is an error encoding `payload`
   * `Poison.DecodeError` - when there is an error decoding the jq query result
@@ -79,7 +92,7 @@ defmodule JQ do
 
   @spec query!(any(), String.t(), list()) :: any()
   def query!(payload, query, options) do
-    %{max_byte_size: max_byte_size} = Enum.into(options, @default_options)
+    %{max_byte_size: max_byte_size, timeout: timeout} = Enum.into(options, @default_options)
 
     json = payload |> Poison.encode!() |> validate_max_byte_size(max_byte_size)
 
@@ -89,8 +102,8 @@ defmodule JQ do
 
     try do
       # Queries can read the process environment through `$ENV` and `env`, so jq runs with an
-      # empty one. `env -i` clears it; System.cmd's `:env` option can only unset named variables.
-      case System.cmd("env", ["-i", jq_executable(), query, file_path], stderr_to_stdout: true) do
+      # empty one. `env -i` clears it; a port's `:env` option can only unset named variables.
+      case run(["-i", jq_executable(), query, file_path], timeout) do
         {_, code} = error when is_integer(code) and code != 0 ->
           raise(SystemCmdException, result: error, command: "jq", args: [query, file_path])
 
@@ -109,6 +122,49 @@ defmodule JQ do
     after
       File.rm!(file_path)
     end
+  end
+
+  # `env` replaces itself with jq, so the port's OS process is jq. System.cmd/3 has no timeout, and
+  # stopping the caller does not stop jq, so the port is read here and jq is killed on timeout.
+  defp run(args, timeout) do
+    port =
+      Port.open({:spawn_executable, System.find_executable("env")}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        args: args
+      ])
+
+    collect(port, [], deadline(timeout))
+  end
+
+  defp deadline(:infinity), do: :infinity
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+
+  defp remaining(:infinity), do: :infinity
+  defp remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp collect(port, output, deadline) do
+    receive do
+      {^port, {:data, data}} -> collect(port, [output | data], deadline)
+      {^port, {:exit_status, code}} -> {IO.iodata_to_binary(output), code}
+    after
+      remaining(deadline) ->
+        kill(port)
+        raise(TimeoutException)
+    end
+  end
+
+  defp kill(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        System.cmd("kill", ["-KILL", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+      nil ->
+        :ok
+    end
+
+    Port.close(port)
   end
 
   # An absolute path, because jq starts without PATH.

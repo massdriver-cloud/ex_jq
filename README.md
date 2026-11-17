@@ -24,6 +24,9 @@ iex> JQ.query(%{key: "value"}, ".key")
 
 iex> JQ.query!(%{key: "value"}, ".key")
 "value"
+
+iex> JQ.query(%{}, "last(range(infinite))", timeout: 1_000)
+{:error, :timeout}
 ```
 
 * [https://hexdocs.pm/jq](https://hexdocs.pm/jq).

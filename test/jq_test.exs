@@ -2,7 +2,7 @@ defmodule JQTest do
   use ExUnit.Case
   doctest JQ
 
-  alias JQ.{MaxByteSizeExceededException, NoResultException, SystemCmdException}
+  alias JQ.{MaxByteSizeExceededException, NoResultException, SystemCmdException, TimeoutException}
 
   describe "JQ.query" do
     test "simple JQ querry" do
@@ -58,6 +58,20 @@ defmodule JQTest do
       assert {:ok, false} == JQ.query(%{"valid" => false}, ".valid")
     end
 
+    test "returns an error and kills jq when it runs longer than the timeout" do
+      started = System.monotonic_time(:millisecond)
+
+      assert {:error, :timeout} = JQ.query(%{}, "last(range(infinite))", timeout: 200)
+      assert System.monotonic_time(:millisecond) - started < 2_000
+
+      {processes, 0} = System.cmd("ps", ["-A", "-o", "command="])
+      refute processes =~ "last(range(infinite))"
+    end
+
+    test "returns the result when jq finishes within the timeout" do
+      assert {:ok, "spencer"} == JQ.query(%{name: "spencer"}, ".name", timeout: 5_000)
+    end
+
     test "does not expose the caller's environment variables" do
       System.put_env("EX_JQ_TEST_SECRET", "hunter2")
 
@@ -83,6 +97,12 @@ defmodule JQTest do
     test "protects against bash injection" do
       assert_raise SystemCmdException, fn ->
         JQ.query!(%{names: ["spencer", "alex"]}, "| say hello")
+      end
+    end
+
+    test "raises when jq runs longer than the timeout" do
+      assert_raise TimeoutException, fn ->
+        JQ.query!(%{}, "last(range(infinite))", timeout: 200)
       end
     end
 

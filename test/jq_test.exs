@@ -66,6 +66,7 @@ defmodule JQTest do
 
       {processes, 0} = System.cmd("ps", ["-A", "-o", "command="])
       refute processes =~ "last(range(infinite))"
+      refute_received {_port, _message}
     end
 
     test "returns the result when jq finishes within the timeout" do

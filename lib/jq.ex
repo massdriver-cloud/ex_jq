@@ -155,6 +155,8 @@ defmodule JQ do
     end
   end
 
+  # The port closes itself when jq exits. Port.close/1 would raise if jq exited first, so this waits for the
+  # exit instead, which also leaves no port messages in the caller's mailbox.
   defp kill(port) do
     case Port.info(port, :os_pid) do
       {:os_pid, os_pid} ->
@@ -164,7 +166,14 @@ defmodule JQ do
         :ok
     end
 
-    Port.close(port)
+    await_exit(port)
+  end
+
+  defp await_exit(port) do
+    receive do
+      {^port, {:data, _data}} -> await_exit(port)
+      {^port, {:exit_status, _code}} -> :ok
+    end
   end
 
   # An absolute path, because jq starts without PATH.
